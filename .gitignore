@@ -1,0 +1,72 @@
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.egg-info/
+.env
+.venv
+venv/
+env/
+.venv/
+*.sqlite3
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb~  # temp notebooks
+
+# --- VS Code / IDEs ---
+.vscode/
+.idea/
+*.code-workspace
+
+# --- Build / dist / cache ---
+build/
+dist/
+.eggs/
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# --- C / C++ / Arduino temp (if you have sketches) ---
+*.o
+*.obj
+*.elf
+*.hex
+
+# --- LaTeX / docs (in case your thesis has TeX) ---
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# --- CSV/data dumps (optional) ---
+# *.csv
+# *.tsv
+
+# --- Virtual env manager stuff ---
+.python-version
+
+# --- Node (if you happen to have any js tooling) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Windows perf / Office temp ---
+~$*
