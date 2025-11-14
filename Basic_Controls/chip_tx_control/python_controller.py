@@ -6,6 +6,28 @@ from tkinter.font import Font
 
 arduino = serial.Serial(port='COM4', baudrate=115200, timeout=0.03)
 
+default_voltages = {
+    'V_MZMtop1': 18.1,
+    'V_MZMtop2': 21.0,
+    'V_MZMbot': 29.5,
+    'V_PStop1': 21.0,
+    'V_PStop2': 23.0,
+    'V_PSbot': 21.9,
+    'V_MZM1': 24.0,
+    'V_MZMQ': 22.8,
+    'V_MZMC': 30.5,
+    'V_QF4': 21.0,
+    'V_EPStop': 11.25,
+    'V_QF2top': 27.3,
+    'V_QF3top': 19.3,
+    'V_EPSbot': 11.2,
+    'V_QF2bot': 26.28,
+    'V_QF3bot': 19.6,
+    'PD_DWDM': 2.0,
+    'RT_DWDM': 0.29
+}
+
+
 
 def read():
     data = arduino.readline()
@@ -33,36 +55,10 @@ def write_float(x):
 def Hybrid_Control():
     V_max = 32.0
     V_inc = 0.05
-    R_EPStop = -14.875
-    R_EPSbot = -14.538
-
-    LUT_Slope_MZMtop2 = -0.6098
-    LUT_Slope_PStop2 = -0.6105
-    LUT_Slope_PStop1 = -0.5435
-
-    V_PStop2_cent = 23.0
-    V_MZMtop2_cent = 21.0
-    V_PStop1_cent = 21.0
-    GPC1_VIS12_threshold = 0.9
-    GPC1_VIS34_threshold = 0.9
-    GPC1_MIN34_threshold = 0.15
-
-    RPS_dS12 = 0.0
-    RPS_dS34 = 0.0
-    RPSY_dS12 = 0.0
-    RPSY_dS34 = 0.0
-
-    LUT_calib_dV2 = 50
-    LUT_calib_N = 5
-
     tk_root = Tk()
     tk_root.title('Hybrid Control')
     tk_frame = Frame(tk_root)
     tk_frame.pack(padx=40, pady=30)
-
-    time.sleep(1)
-    write("0")
-    time.sleep(1)
 
     # region Initialization
     V_EPStop = float(read())
@@ -83,11 +79,6 @@ def Hybrid_Control():
     V_MZMC = float(read())
     PD_DWDM = 2.0
     RT_DWDM = 0.29
-    V_MZMtop2_ref = V_MZMtop2
-    V_PStop2_ref = V_PStop2
-    V_PStop1_ref = V_PStop1
-    V_EPStop_ref = V_EPStop
-    V_EPSbot_ref = V_EPSbot
 
     V_EPStop_str = StringVar()
     V_EPSbot_str = StringVar()
@@ -133,14 +124,6 @@ def Hybrid_Control():
 
     # region Buntton Functions
     def _quit():
-        write("0")
-        write("0")
-        tk_root.quit()
-        tk_root.destroy()
-
-    def _quit2():
-        write("0")
-        # write("0")
         tk_root.quit()
         tk_root.destroy()
 
@@ -167,7 +150,7 @@ def Hybrid_Control():
         PD_DWDM = float(PD_DWDM_str.get())
         RT_DWDM = float(RT_DWDM_str.get())
 
-        write("1")
+        write("UPDATE_VOLTAGES\n")
         write_float(V_EPStop)
         write_float(V_QF2top)
         write_float(V_QF3top)
@@ -320,8 +303,6 @@ def Hybrid_Control():
 
     QuitButton = Button(master=tk_root, text="Quit", command=_quit, font=('Arial', 18))
     QuitButton.pack(side=RIGHT, fill='both', expand=False)
-    Quit2Button = Button(master=tk_root, text="Quit2", command=_quit2, font=('Arial', 18))
-    Quit2Button.pack(side=RIGHT, fill='both', expand=False)
     UpdateButton = Button(master=tk_root, text="Update", command=update_voltage, font=('Arial', 18))
     UpdateButton.pack(side=RIGHT, fill='both', expand=False)
 
@@ -330,7 +311,6 @@ def Hybrid_Control():
 
 if __name__ == '__main__':
     time.sleep(1)
-    write("9")
     while True:
         output = read()
         if output == "Ready.\r\n":

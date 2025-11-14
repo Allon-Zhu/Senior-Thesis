@@ -20,7 +20,6 @@ const uint16_t Tx_period_us = 100;
 // TX Max Size
 #define MAX_INPUT 2048
 
-
 // DAC parameters
 #define DAC_CS 13
 #define DAC_RST 28
@@ -33,9 +32,7 @@ const uint8_t ALL_RAN = 40;
 
 // Voltage Sanity Bounds
 const float V_MIN = 0.0;
-const float V_MAX_mzi = 30.0;
-const float V_MAX_qf = 30.0;
-const float V_MAX_eps = 27.0;
+const float V_MAX = 30.0;
 
 // Voltage Control Pins
 const uint8_t PStop2_PIN = 8;
@@ -54,24 +51,6 @@ const uint8_t EPSbot_PIN = 4;
 const uint8_t MZMQ_PIN = 5;
 const uint8_t PSbot_PIN = 6;
 const uint8_t MZMbot_PIN = 7;
-
-// Default Voltages
-float V_MZMtop1 = 18.1;
-float V_MZMtop2 = 21.0;
-float V_MZMbot = 29.5;
-float V_PStop1 = 21.0;
-float V_PStop2 = 23.0;
-float V_PSbot = 21.9;
-float V_MZM1 = 24.0;
-float V_MZMQ = 22.80;
-float V_MZMC = 30.5;
-float V_QF4 = 21.0;
-float V_EPStop = 11.25;
-float V_QF2top = 27.3;
-float V_QF3top = 19.3;
-float V_EPSbot = 11.20;
-float V_QF2bot = 26.28;
-float V_QF3bot = 19.60;
 
 // QF4 Low and High Voltages
 float Tx_VH = 19.0;
@@ -156,50 +135,6 @@ bool printPacketBits(const bool* bits, size_t n) {
   return true;
 }
 
-void init_voltages() {
-  // Tune everyone to the correct voltage
-  dac -> set_out(MZM1_PIN, int(V_MZM1/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMtop1_PIN, int(V_MZMtop1/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMtop2_PIN, int(V_MZMtop2/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMbot_PIN, int(V_MZMbot/ALL_RAN*OUT_MAX));
-  dac -> set_out(PStop1_PIN, int(V_PStop1/ALL_RAN*OUT_MAX));
-  dac -> set_out(PStop2_PIN, int(V_PStop2/ALL_RAN*OUT_MAX));
-  dac -> set_out(PSbot_PIN, int(V_PSbot/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMQ_PIN, int(V_MZMQ/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMC_PIN, int(V_MZMC/ALL_RAN*OUT_MAX));
-  dac -> set_out(EPStop_PIN, int(V_EPStop/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF2top_PIN, int(V_QF2top/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF3top_PIN, int(V_QF3top/ALL_RAN*OUT_MAX));
-  dac -> set_out(EPSbot_PIN, int(V_EPSbot/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF2bot_PIN, int(V_QF2bot/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF3bot_PIN, int(V_QF3bot/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF4_PIN, int(V_QF4/ALL_RAN*OUT_MAX));
-  dac -> sync(1);
-  delay(2000);
-  Serial.println("Ready.");
-
-  // Send voltage data to Tx_Control
-  while (Serial.available() == 0) {}
-  Serial.parseInt();
-  Serial.println(V_EPStop);
-  Serial.println(V_QF2top);
-  Serial.println(V_QF3top);
-  Serial.println(V_EPSbot);
-  Serial.println(V_QF2bot);
-  Serial.println(V_QF3bot);
-  Serial.println(V_QF4);
-  Serial.println(V_MZMtop1);
-  Serial.println(V_MZMtop2);
-  Serial.println(V_MZMbot);
-  Serial.println(V_PStop1);
-  Serial.println(V_PStop2);
-  Serial.println(V_PSbot);
-  Serial.println(V_MZM1);
-  Serial.println(V_MZMQ);
-  Serial.println(V_MZMC);
-}
-
-
 void setup() {
 
   // Setup Serial
@@ -221,9 +156,7 @@ void setup() {
     dac -> set_range(i, DACX1416::U_40);
     dac -> set_ch_sync(i, true);
   }
-
-  // Initialize Voltages
-  init_voltages()
+  Seial.println("Ready.")
 }
 
 
