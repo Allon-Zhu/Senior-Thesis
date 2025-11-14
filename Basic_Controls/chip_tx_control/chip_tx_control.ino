@@ -10,9 +10,18 @@ static const int SerialTimeOut  = 200;
 
 static const uint16_t Tx_period_us = 100;
 
-#define PREFIX_COUNT 4
+#define PREFIX_COUNT 5
 #define PREFIX_BYTE 'U'
 #define MAX_INPUT 2048
+
+constexpr uint8_t calc_len_bytes_u32(uint32_t x) {
+  return (x <= 0xFFu)       ? 1 :
+         (x <= 0xFFFFu)     ? 2 :
+         (x <= 0xFFFFFFu)   ? 3 :
+                              4;
+}
+constexpr uint8_t LEN_BYTES = calc_len_bytes_u32(MAX_INPUT);
+
 
 // ========================== DAC / Hardware ==========================
 #define DAC_CS   13
@@ -49,6 +58,11 @@ const uint8_t MZMbot_PIN  = 7;
 // QF4 signaling levels (unchanged from your code)
 float Tx_VH = 19.0f;
 float Tx_VL = 23.0f;
+
+unsigned long Tx_t1 = 0;
+int Tx_idx = 0;
+int Data_idx = 0;
+float Tx_V = 0.0;
 
 const int TEENSY_PIN = 53;
 
@@ -98,6 +112,23 @@ String waitForSerialCommand() {
   return input;
 }
 
+void set_tx_levels() {
+  // Read two floats: VL then VH
+  delay(50);
+  float newVL = clampV(Serial.parseFloat());
+  float newVH = clampV(Serial.parseFloat());
+
+  // Assign (no ordering enforced; you currently use VL as idle)
+  Tx_VL = newVL;
+  Tx_VH = newVH;
+
+  // Immediately drive QF4 to the (new) idle/low level and sync
+  delayMicroseconds(50);
+
+  Serial.println("Done");
+}
+
+
 bool printPacketBits(const bool* bits, size_t n) {
   char* buf = (char*)malloc(n + 1);
   if (!buf) return false;
@@ -112,6 +143,7 @@ bool printPacketBits(const bool* bits, size_t n) {
 void update_voltages() {
   // Read floats in the exact order Python sends them
   delay(200);
+  Serial.println("ACK");
   V_EPStop   = clampV(Serial.parseFloat());
   V_QF2top   = clampV(Serial.parseFloat());
   V_QF3top   = clampV(Serial.parseFloat());
@@ -196,9 +228,11 @@ void loop() {
     char inputBuf[MAX_INPUT + 1];
     size_t n = Serial.readBytesUntil('\n', inputBuf, MAX_INPUT);
     inputBuf[n] = '\0';
-    uint8_t payloadLen = static_cast<uint8_t>(n);
+    uint32_t payloadLen = static_cast<uint32_t>(n);
+    if (payloadLen > MAX_INPUT) payloadLen = MAX_INPUT;
 
-    size_t totalLen = PREFIX_COUNT + 1 + payloadLen;
+    size_t totalLen = PREFIX_COUNT + LEN_BYTES + payloadLen;
+    Serial.println(totalLen);
 
     // Build ASCII packet [ U U U U | len | payload... ]
     char* packet = (char*)malloc(totalLen);
@@ -208,8 +242,8 @@ void loop() {
     }
     size_t idx = 0;
     for (uint8_t i = 0; i < PREFIX_COUNT; ++i) packet[idx++] = PREFIX_BYTE;
-    packet[idx++] = payloadLen;
-    for (uint8_t i = 0; i < payloadLen; ++i) packet[idx++] = static_cast<uint8_t>(inputBuf[i]);
+    for (uint8_t i = 0; i < LEN_BYTES; ++i) packet[idx++] = (uint8_t)((payloadLen >> (8 * i)) & 0xFF);
+    for (uint32_t i = 0; i < payloadLen; ++i) packet[idx++] = static_cast<uint8_t>(inputBuf[i]);
 
     // Encode to bits via your modem
     bool* packetBin = (bool*)malloc(totalLen * 8);
@@ -222,12 +256,11 @@ void loop() {
 
     // Transmit bits using your globals (from control.h/modem.h)
     Tx_t1  = micros();
-    tic    = Tx_t1;
     Tx_idx = 0;
     Data_idx = 0;
 
     while (true) {
-      if (micros() - Tx_t1 >= (uint32_t)Tx_idx * Tx_period_us) {
+      if (micros() - Tx_t1 >= Tx_idx * Tx_period_us) {
         if (Tx_idx < (int)(totalLen * 8)) {
           Tx_V = (packetBin[Data_idx] == 0) ? Tx_VL : Tx_VH;
           Data_idx++;
@@ -260,6 +293,10 @@ void loop() {
       Serial.println("Setting High");
     }
     Serial.println("Done");
+  }
+
+  else if (command == "SET_TX_LEVELS") {
+    set_tx_levels();
   }
 
   else {

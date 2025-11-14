@@ -3,37 +3,13 @@ import time
 import serial.tools.list_ports
 from tkinter import *
 from tkinter.font import Font
-
-arduino = serial.Serial(port='COM4', baudrate=115200, timeout=0.03)
-
-default_voltages = {
-    'V_MZMtop1': 18.1,
-    'V_MZMtop2': 21.0,
-    'V_MZMbot': 29.5,
-    'V_PStop1': 21.0,
-    'V_PStop2': 23.0,
-    'V_PSbot': 21.9,
-    'V_MZM1': 24.0,
-    'V_MZMQ': 22.8,
-    'V_MZMC': 30.5,
-    'V_QF4': 21.0,
-    'V_EPStop': 11.25,
-    'V_QF2top': 27.3,
-    'V_QF3top': 19.3,
-    'V_EPSbot': 11.2,
-    'V_QF2bot': 26.28,
-    'V_QF3bot': 19.6,
-    'PD_DWDM': 2.0,
-    'RT_DWDM': 0.29
-}
-
-
+from tkinter import simpledialog, messagebox
+from tkinter.scrolledtext import ScrolledText
 
 def read():
     data = arduino.readline()
     data = data.decode('UTF-8')
     return data
-
 
 def query(x):
     arduino.write(bytes(x, 'utf-8'))
@@ -41,10 +17,8 @@ def query(x):
     data = arduino.readline()
     return data
 
-
 def write(x):
     arduino.write(bytes(str(x), 'utf-8'))
-
 
 def write_float(x):
     arduino.write(bytes(str(x), 'utf-8'))
@@ -52,12 +26,27 @@ def write_float(x):
     time.sleep(0.05)
 
 
-from tkinter import *
-from tkinter.font import Font
-from tkinter import simpledialog, messagebox
-from tkinter.scrolledtext import ScrolledText
-
 def Hybrid_Control():
+    default_voltages = {
+        'V_MZMtop1': 18.1,
+        'V_MZMtop2': 21.0,
+        'V_MZMbot': 29.5,
+        'V_PStop1': 21.0,
+        'V_PStop2': 23.0,
+        'V_PSbot': 21.9,
+        'V_MZM1': 24.0,
+        'V_MZMQ': 22.8,
+        'V_MZMC': 30.5,
+        'V_QF4': 21.0,
+        'V_EPStop': 11.25,
+        'V_QF2top': 27.3,
+        'V_QF3top': 19.3,
+        'V_EPSbot': 11.2,
+        'V_QF2bot': 26.28,
+        'V_QF3bot': 19.6,
+        'PD_DWDM': 2.0,
+        'RT_DWDM': 0.29
+    }
     V_max = 32.0
     V_inc = 0.05
 
@@ -106,9 +95,12 @@ def Hybrid_Control():
     # Helper: send full voltage set to Arduino in the required order
     def write_voltage_sequence(voltage_dict):
         write("UPDATE_VOLTAGES\n")
+        while True:
+            out = read()
+            if out.strip() == "ACK":
+                break
         for key in write_order:
             write_float(float(voltage_dict[key]))
-        # Wait for "Done."
         while True:
             output = read()
             if output.strip() == "Done.":
@@ -142,9 +134,9 @@ def Hybrid_Control():
         msg = simpledialog.askstring("Pulse Test", "Enter message to send:")
         if msg is None:
             return
-        write("p")
+        write("SEND_MESSAGE\n")
         write(msg)
-        log_print(f"[TX] p{msg!r}")
+        log_print(f"[TX] Sending Message: {msg!r}")
         # Read until Done
         while True:
             resp = read()
@@ -160,9 +152,33 @@ def Hybrid_Control():
         msg = simpledialog.askstring("Teensy Test", "Enter message to send:")
         if msg is None:
             return
-        write("t")
+        write("TEST_TEENSY\n")
         write(msg)
-        log_print(f"[TX] t{msg!r}")
+        log_print(f"[TX] Setting Pulse: {msg!r}")
+        while True:
+            resp = read()
+            if resp == '':
+                tk_root.update_idletasks()
+                tk_root.update()
+                continue
+            log_print(f"[RX] {resp.strip()}")
+            if resp.strip() == "Done":
+                break
+
+    def set_tx_levels():
+        # Ask user for low and high; prefill with something sensible if you like
+        vl = simpledialog.askfloat("Set TX Levels", "Enter VL (low) in volts:", minvalue=0.0, maxvalue=30.0,
+                                   parent=tk_root)
+        if vl is None:
+            return
+        vh = simpledialog.askfloat("Set TX Levels", "Enter VH (high) in volts:", minvalue=0.0, maxvalue=30.0,
+                                   parent=tk_root)
+        if vh is None:
+            return
+        write("SET_TX_LEVELS\n")
+        write_float(float(vl))
+        write_float(float(vh))
+        # wait for Arduino to acknowledge
         while True:
             resp = read()
             if resp == '':
@@ -204,7 +220,7 @@ def Hybrid_Control():
     Button(tk_root, text="Teensy Test", command=Teensy_Control_Test, font=('Arial', 16)).pack(side=LEFT, padx=10, pady=10)
     Button(tk_root, text="Update",      command=lambda: update_voltage(None), font=('Arial', 16)).pack(side=RIGHT, padx=10, pady=10)
     Button(tk_root, text="Quit",        command=_quit, font=('Arial', 16)).pack(side=RIGHT, padx=10, pady=10)
-
+    Button(tk_root, text="Set TX Levels", command=set_tx_levels, font=('Arial', 16)).pack(side=LEFT, padx=10, pady=10)
     # Initialize Arduino + GUI with defaults
     update_voltage(default_voltages)
 
@@ -214,8 +230,10 @@ def Hybrid_Control():
 
 if __name__ == '__main__':
     time.sleep(1)
+    arduino = serial.Serial(port='COM4', baudrate=115200, timeout=0.03)
     while True:
         output = read()
-        if output == "Ready.\r\n":
+        if output.strip() == "Ready.":
             break
     Hybrid_Control()
+    arduino.close()
