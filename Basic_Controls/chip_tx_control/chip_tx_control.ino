@@ -4,238 +4,266 @@
 #include "Arduino.h"
 #include <stdlib.h>
 
-#pragma region User Parameters
-// Serial Communication
-int BaudRate = 115200;
-int SerialTimeOut = 200;
-int Serial_Input = 0;
+// ========================== Serial / Timing ==========================
+static const int BaudRate       = 115200;
+static const int SerialTimeOut  = 200;
 
-// TX Clock Period
-const uint16_t Tx_period_us = 100;
+static const uint16_t Tx_period_us = 100;
 
-// TX Clock Recovery
 #define PREFIX_COUNT 4
 #define PREFIX_BYTE 'U'
-
-// TX Max Size
 #define MAX_INPUT 2048
 
-// DAC parameters
-#define DAC_CS 13
-#define DAC_RST 28
+// ========================== DAC / Hardware ==========================
+#define DAC_CS   13
+#define DAC_RST  28
 #define DAC_LDAC 12
-#define SYNC 10
+#define SYNC     10
 const int SPI_SPEED = 21000000;
-DACX1416* dac;
+DACX1416* dac = nullptr;
+
 const int OUT_MAX = 65535;
-const uint8_t ALL_RAN = 40;
+const uint8_t ALL_RAN = 40;   // DAC range U_40 (0..40 V logical)
 
-// Voltage Sanity Bounds
-const float V_MIN = 0.0;
-const float V_MAX = 30.0;
+const float V_MIN = 0.0f;
+const float V_MAX = 30.0f;    // sanity clamp, even if DAC range is 40 V
 
-// Voltage Control Pins
-const uint8_t PStop2_PIN = 8;
+// These are DAC channel indices (not MCU GPIO pins)
+const uint8_t PStop2_PIN  = 8;
 const uint8_t MZMtop2_PIN = 9;
-const uint8_t PStop1_PIN = 10;
+const uint8_t PStop1_PIN  = 10;
 const uint8_t MZMtop1_PIN = 11;
-const uint8_t MZM1_PIN = 12;
-const uint8_t MZMC_PIN = 13;
-const uint8_t EPStop_PIN = 14;
-const uint8_t QF2top_PIN = 15;
-const uint8_t QF3top_PIN = 0;
-const uint8_t QF4_PIN = 1;
-const uint8_t QF3bot_PIN = 2;
-const uint8_t QF2bot_PIN = 3;
-const uint8_t EPSbot_PIN = 4;
-const uint8_t MZMQ_PIN = 5;
-const uint8_t PSbot_PIN = 6;
-const uint8_t MZMbot_PIN = 7;
+const uint8_t MZM1_PIN    = 12;
+const uint8_t MZMC_PIN    = 13;
+const uint8_t EPStop_PIN  = 14;
+const uint8_t QF2top_PIN  = 15;
+const uint8_t QF3top_PIN  = 0;
+const uint8_t QF4_PIN     = 1;
+const uint8_t QF3bot_PIN  = 2;
+const uint8_t QF2bot_PIN  = 3;
+const uint8_t EPSbot_PIN  = 4;
+const uint8_t MZMQ_PIN    = 5;
+const uint8_t PSbot_PIN   = 6;
+const uint8_t MZMbot_PIN  = 7;
 
-// QF4 Low and High Voltages
-float Tx_VH = 19.0;
-float Tx_VL = 23.0;
+// QF4 signaling levels (unchanged from your code)
+float Tx_VH = 19.0f;
+float Tx_VL = 23.0f;
 
-// Teensy Control Pin
 const int TEENSY_PIN = 53;
 
-#pragma endregion
+// ========================== Current Setpoints ==========================
+float V_EPStop   = 0.0f;
+float V_QF2top   = 0.0f;
+float V_QF3top   = 0.0f;
+float V_EPSbot   = 0.0f;
+float V_QF2bot   = 0.0f;
+float V_QF3bot   = 0.0f;
+float V_QF4      = 0.0f;
+float V_MZMtop1  = 0.0f;
+float V_MZMtop2  = 0.0f;
+float V_MZMbot   = 0.0f;
+float V_PStop1   = 0.0f;
+float V_PStop2   = 0.0f;
+float V_PSbot    = 0.0f;
+float V_MZM1     = 0.0f;
+float V_MZMQ     = 0.0f;
+float V_MZMC     = 0.0f;
 
+// Read-but-unused (keeps the stream aligned with Python)
+float PD_DWDM    = 0.0f;
+float RT_DWDM    = 0.0f;
 
-void update_voltages() {
-  delay(200);
-  V_EPStop = Serial.parseFloat();
-  V_QF2top = Serial.parseFloat();
-  V_QF3top = Serial.parseFloat();
-  V_EPSbot = Serial.parseFloat();
-  V_QF2bot = Serial.parseFloat();
-  V_QF3bot = Serial.parseFloat();
-  V_QF4 = Serial.parseFloat();
-  V_MZMtop1 = Serial.parseFloat();
-  V_MZMtop2 = Serial.parseFloat();
-  V_MZMbot = Serial.parseFloat();
-  V_PStop1 = Serial.parseFloat();
-  V_PStop2 = Serial.parseFloat();
-  V_PSbot = Serial.parseFloat();
-  V_MZM1 = Serial.parseFloat();
-  V_MZMQ = Serial.parseFloat();
-  V_MZMC = Serial.parseFloat();
+// ========================== Helpers ==========================
+static inline float clampV(float v) {
+  if (v < V_MIN) v = V_MIN;
+  if (v > V_MAX) v = V_MAX;
+  return v;
+}
 
-  dac -> set_out(MZM1_PIN, int(V_MZM1/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMtop1_PIN, int(V_MZMtop1/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMtop2_PIN, int(V_MZMtop2/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMbot_PIN, int(V_MZMbot/ALL_RAN*OUT_MAX));
-  dac -> set_out(PStop1_PIN, int(V_PStop1/ALL_RAN*OUT_MAX));
-  dac -> set_out(PStop2_PIN, int(V_PStop2/ALL_RAN*OUT_MAX));
-  dac -> set_out(PSbot_PIN, int(V_PSbot/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMQ_PIN, int(V_MZMQ/ALL_RAN*OUT_MAX));
-  dac -> set_out(MZMC_PIN, int(V_MZMC/ALL_RAN*OUT_MAX));
-  dac -> set_out(EPStop_PIN, int(V_EPStop/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF2top_PIN, int(V_QF2top/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF3top_PIN, int(V_QF3top/ALL_RAN*OUT_MAX));
-  dac -> set_out(EPSbot_PIN, int(V_EPSbot/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF2bot_PIN, int(V_QF2bot/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF3bot_PIN, int(V_QF3bot/ALL_RAN*OUT_MAX));
-  dac -> set_out(QF4_PIN, int(V_QF4/ALL_RAN*OUT_MAX));
-  dac -> sync(1);
-  delayMicroseconds(50);
-  Serial.println("Done.");
+static inline uint16_t v2code(float v) {
+  float vv = clampV(v);
+  float ratio = vv / (float)ALL_RAN;       // normalize to 0..1 over 40 V full-scale
+  if (ratio < 0.0f) ratio = 0.0f;
+  if (ratio > 1.0f) ratio = 1.0f;
+  return (uint16_t)roundf(ratio * OUT_MAX);
 }
 
 String waitForSerialCommand() {
-  // Wait until data is available on Serial
   while (Serial.available() == 0) {
-    // Do nothing (blocking)
+    // blocking wait
   }
-
-  // Read the incoming string until newline
   String input = Serial.readStringUntil('\n');
-
-  // Remove any carriage return or whitespace
   input.trim();
-
-  // Optional: print it back for confirmation
-  Serial.print("Received: ");
-  Serial.println(input);
-
   return input;
 }
 
 bool printPacketBits(const bool* bits, size_t n) {
-  char* buf = (char*)malloc(n + 1);   // +1 for '\n' (or '\0' if you prefer)
+  char* buf = (char*)malloc(n + 1);
   if (!buf) return false;
-
-  for (size_t i = 0; i < n; ++i) {
-    buf[i] = bits[i] ? '1' : '0';
-  }
+  for (size_t i = 0; i < n; ++i) buf[i] = bits[i] ? '1' : '0';
   buf[n] = '\n';
-
   Serial.write(buf, n + 1);
   free(buf);
   return true;
 }
 
-void setup() {
+// ========================== UPDATE_VOLTAGES ==========================
+void update_voltages() {
+  // Read floats in the exact order Python sends them
+  delay(200);
+  V_EPStop   = clampV(Serial.parseFloat());
+  V_QF2top   = clampV(Serial.parseFloat());
+  V_QF3top   = clampV(Serial.parseFloat());
+  V_EPSbot   = clampV(Serial.parseFloat());
+  V_QF2bot   = clampV(Serial.parseFloat());
+  V_QF3bot   = clampV(Serial.parseFloat());
+  V_QF4      = clampV(Serial.parseFloat());
+  V_MZMtop1  = clampV(Serial.parseFloat());
+  V_MZMtop2  = clampV(Serial.parseFloat());
+  V_MZMbot   = clampV(Serial.parseFloat());
+  V_PStop1   = clampV(Serial.parseFloat());
+  V_PStop2   = clampV(Serial.parseFloat());
+  V_PSbot    = clampV(Serial.parseFloat());
+  V_MZM1     = clampV(Serial.parseFloat());
+  V_MZMQ     = clampV(Serial.parseFloat());
+  V_MZMC     = clampV(Serial.parseFloat());
 
-  // Setup Serial
+  // Keep stream aligned (read but not used for DAC)
+  PD_DWDM     = Serial.parseFloat();
+  RT_DWDM     = Serial.parseFloat();
+
+  // Always set all outputs, then always sync
+  dac->set_out(MZM1_PIN,    v2code(V_MZM1));
+  dac->set_out(MZMtop1_PIN, v2code(V_MZMtop1));
+  dac->set_out(MZMtop2_PIN, v2code(V_MZMtop2));
+  dac->set_out(MZMbot_PIN,  v2code(V_MZMbot));
+  dac->set_out(PStop1_PIN,  v2code(V_PStop1));
+  dac->set_out(PStop2_PIN,  v2code(V_PStop2));
+  dac->set_out(PSbot_PIN,   v2code(V_PSbot));
+  dac->set_out(MZMQ_PIN,    v2code(V_MZMQ));
+  dac->set_out(MZMC_PIN,    v2code(V_MZMC));
+  dac->set_out(EPStop_PIN,  v2code(V_EPStop));
+  dac->set_out(QF2top_PIN,  v2code(V_QF2top));
+  dac->set_out(QF3top_PIN,  v2code(V_QF3top));
+  dac->set_out(EPSbot_PIN,  v2code(V_EPSbot));
+  dac->set_out(QF2bot_PIN,  v2code(V_QF2bot));
+  dac->set_out(QF3bot_PIN,  v2code(V_QF3bot));
+  dac->set_out(QF4_PIN,     v2code(V_QF4));
+
+  dac->sync(1);                 // <-- always sync after an update
+  delayMicroseconds(50);
+
+  Serial.println("Done.");
+}
+
+// ========================== Setup / Loop ==========================
+void setup() {
   Serial.begin(BaudRate);
   Serial.setTimeout(SerialTimeOut);
 
-  // Enable Pins
   pinMode(SYNC, OUTPUT);
   pinMode(TEENSY_PIN, OUTPUT);
 
-  // Enable DAC
+  // Initialize DAC
   dac = new DACX1416(DAC_CS, DAC_RST, DAC_LDAC, &SPI, SPI_SPEED);
   delay(1500);
-  dac -> read_reg(R_DEVICEID);
-  int res = dac -> init();
-  dac -> set_int_reference(false);
-  for(int i=0; i<16; i++){
-    dac -> set_ch_enabled(i, true);
-    dac -> set_range(i, DACX1416::U_40);
-    dac -> set_ch_sync(i, true);
-  }
-  Seial.println("Ready.")
-}
+  dac->read_reg(R_DEVICEID);
+  (void)dac->init();
+  dac->set_int_reference(false);
 
+  // Enable/sync all channels, set to 0..40V logical range
+  for (int i = 0; i < 16; i++) {
+    dac->set_ch_enabled(i, true);
+    dac->set_range(i, DACX1416::U_40);
+    dac->set_ch_sync(i, true);  // changes stage until sync()
+  }
+
+  Serial.println("Ready.");
+}
 
 void loop() {
   String command = waitForSerialCommand();
 
   if (command == "UPDATE_VOLTAGES") {
-    update_voltages()
-    Serial.println("Voltages Updated.")
-  } else if(command == "SEND_MESSAGE"){
-    
-    // Wait for Message to Send
-    while(!Serial.available()){}
+    update_voltages();  // prints "Done."
+  }
 
-    // Read message and get length
+  else if (command == "SEND_MESSAGE") {
+    // Wait for message payload line
+    while (!Serial.available()) { /* wait */ }
+
     char inputBuf[MAX_INPUT + 1];
     size_t n = Serial.readBytesUntil('\n', inputBuf, MAX_INPUT);
     inputBuf[n] = '\0';
     uint8_t payloadLen = static_cast<uint8_t>(n);
-    
+
     size_t totalLen = PREFIX_COUNT + 1 + payloadLen;
 
-    // Create Packet in ASCII
-    char packet[totalLen + 1];
+    // Build ASCII packet [ U U U U | len | payload... ]
+    char* packet = (char*)malloc(totalLen);
+    if (!packet) {
+      Serial.println("Done");
+      return;
+    }
     size_t idx = 0;
-    for (uint8_t i = 0; i < PREFIX_COUNT; ++i) {
-      packet[idx++] = PREFIX_BYTE;
-    }
-
-    // Add length byte
+    for (uint8_t i = 0; i < PREFIX_COUNT; ++i) packet[idx++] = PREFIX_BYTE;
     packet[idx++] = payloadLen;
+    for (uint8_t i = 0; i < payloadLen; ++i) packet[idx++] = static_cast<uint8_t>(inputBuf[i]);
 
-    // Add payload bytes
-    for (uint8_t i = 0; i < payloadLen; ++i) {
-      packet[idx++] = static_cast<uint8_t>(inputBuf[i]);
+    // Encode to bits via your modem
+    bool* packetBin = (bool*)malloc(totalLen * 8);
+    if (!packetBin) {
+      free(packet);
+      Serial.println("Done");
+      return;
     }
-    packet[idx] = '\0';
+    Encoder(packet, totalLen, packetBin);  // from modem.h
 
-    // Encode Packet in Binary
-    bool packetBin[totalLen * 8];
-    Encoder(packet, totalLen, packetBin);
-
-    // Send each bit in order
-    Tx_t1 = micros();
-    tic = Tx_t1;
+    // Transmit bits using your globals (from control.h/modem.h)
+    Tx_t1  = micros();
+    tic    = Tx_t1;
     Tx_idx = 0;
     Data_idx = 0;
 
-    while(true){
-      // Check if packet should continue being sent
-      if(micros() - Tx_t1 >= Tx_idx * Tx_period_us){
-        // If packet isn't done sending, send next bit
-        if(Tx_idx < totalLen * 8){
+    while (true) {
+      if (micros() - Tx_t1 >= (uint32_t)Tx_idx * Tx_period_us) {
+        if (Tx_idx < (int)(totalLen * 8)) {
           Tx_V = (packetBin[Data_idx] == 0) ? Tx_VL : Tx_VH;
           Data_idx++;
-          dac -> set_out(QF4_PIN, int(Tx_V/ALL_RAN*OUT_MAX));
-          dac -> sync(1);
+          dac->set_out(QF4_PIN, v2code(Tx_V));
+          dac->sync(1);              // latch every bit transition
           Tx_idx++;
           delayMicroseconds(30);
-        }
-        // Else, set output to 0 and break
-        else if(Tx_idx >= totalLen*8){
-          dac -> set_out(QF4_PIN, int(Tx_VL/ALL_RAN*OUT_MAX));
-          dac -> sync(1);
+        } else {
+          // Done: set to idle level and break
+          dac->set_out(QF4_PIN, v2code(Tx_VL));
+          dac->sync(1);
           break;
         }
       }
     }
+
+    free(packetBin);
+    free(packet);
     Serial.println("Done");
-  } else if (command == "TEST_TEENSY") {
-    while(!Serial.available()){}
+  }
+
+  else if (command == "TEST_TEENSY") {
+    while (!Serial.available()) { /* wait */ }
     char mode = Serial.read();
-    if(mode == '0') {
+    if (mode == '0') {
       digitalWrite(TEENSY_PIN, LOW);
       Serial.println("Setting Low");
-    } else if(mode == '1') {
+    } else if (mode == '1') {
       digitalWrite(TEENSY_PIN, HIGH);
       Serial.println("Setting High");
     }
     Serial.println("Done");
+  }
+
+  else {
+    // Unknown command; ignore or add debug
+    // Serial.println("Unknown command");
   }
 }
