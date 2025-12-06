@@ -30,7 +30,6 @@ env/
 build/
 dist/
 .eggs/
-*.log
 *.tmp
 *.bak
 *.swp
@@ -56,8 +55,8 @@ dist/
 *.lot
 
 # --- CSV/data dumps (optional) ---
-# *.csv
-# *.tsv
+*.csv
+*.tsv
 
 # --- Virtual env manager stuff ---
 .python-version
