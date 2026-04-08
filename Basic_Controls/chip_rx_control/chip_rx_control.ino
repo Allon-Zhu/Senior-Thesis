@@ -15,6 +15,7 @@ volatile int      PD_Repeat = 5;     // average N samples per channel
 volatile uint16_t Delay_ms  = 50;    // delay between lines while streaming
 
 #define THRESH 500
+// #define THRESH 300
 #define READ_BIT()  ((DueAdcF.ReadAnalogPin(PD1_PIN) > THRESH) ? 1 : 0)
 
 // ====== Simple packet decode config (match your TX) ======
@@ -37,10 +38,6 @@ static inline String waitForLine() {
   return s;
 }
 
-static inline void wait_until_us(uint32_t t) {
-  while ((int32_t)(micros() - t) < 0) { /* tight spin; keep fast for timing */ }
-}
-
 uint16_t read_pd_channel(int pin) {
   uint32_t acc = 0;
   for (int i = 0; i < PD_Repeat; ++i) {
@@ -51,108 +48,121 @@ uint16_t read_pd_channel(int pin) {
 
 // One-shot packet receiver (your existing approach, trimmed a bit)
 bool rx_once_packet() {
-  // 1) find first rising edge
-  int last = READ_BIT();
-  while (last != 0) last = READ_BIT();
-
-  uint32_t t_start = 0, last_edge_ts = 0;
-  for (;;) {
-    int b = READ_BIT();
-    if (b != last && b == 1) {
-      uint32_t t_edge = micros();                  // timestamp NOW
-      if (EDGE_CONFIRM_US) {
-        delayMicroseconds(EDGE_CONFIRM_US);
-        if (READ_BIT() != 1) { last = b; continue; }
-      }
-      last = 1;
-      t_start = t_edge;                             // unbiased
-      break;
-    }
-    last = b;
+  // -----------------------------
+  // State 1) HOLDING
+  // -----------------------------
+  // Wait until the line is HIGH (first '1' of the first reversed 'U' = 10101010).
+HOLDING_RESTART:
+  // -----------------------------
+  // State 1) HOLDING
+  // -----------------------------
+  while (READ_BIT() == 0) { /* spin */ }
+  if (EDGE_CONFIRM_US) {
+    delayMicroseconds(EDGE_CONFIRM_US);
+    if (READ_BIT() == 0) goto HOLDING_RESTART;   // glitch
   }
 
-  // === consume the rest of the preamble, keep unbiased time of each confirmed edge ===
-  const uint32_t EDGES_TO_MEASURE = (uint32_t)(PREFIX_COUNT * 8u) - 1u;
-  last_edge_ts = t_start;
-  for (uint16_t i = 0; i < EDGES_TO_MEASURE; ++i) {
-    int b;
-    do { b = READ_BIT(); } while (b == last);
-    uint32_t edge_ts = micros();                   // timestamp NOW
+  int last = 1;
+
+  // -----------------------------
+  // State 2) CLOCK RECOVERY
+  // -----------------------------
+  const uint16_t FALLS_NEEDED = (uint16_t)(4u * (uint16_t)PREFIX_COUNT);
+
+  // Debug: record all falling edges
+  uint32_t fall_ts[ (uint16_t)(4u * (uint16_t)PREFIX_COUNT) ];  // VLA if PREFIX_COUNT not const
+  // If your compiler doesn't allow this, replace with: static uint32_t fall_ts[MAX_PREFIX_FALLS];
+
+  uint16_t fall_count = 0;
+
+  while (fall_count < FALLS_NEEDED) {
+    int b = READ_BIT();
+    if (b == last) continue;
+
+    uint32_t t_edge = micros();
+
     if (EDGE_CONFIRM_US) {
       delayMicroseconds(EDGE_CONFIRM_US);
-      if (READ_BIT() == last) { --i; continue; }   // glitch; retry same edge
+      if (READ_BIT() != b) {
+        continue; // glitch; ignore
+      }
     }
+
+    if (last == 1 && b == 0) {
+      if (fall_count < FALLS_NEEDED) {
+        fall_ts[fall_count] = t_edge;
+      }
+      ++fall_count;
+    }
+
     last = b;
-    last_edge_ts = edge_ts;                        // unbiased
   }
-  uint32_t t_end   = last_edge_ts;
-  uint32_t span_us = (t_end - t_start);
 
-  // ===== 3) Recover clock: T = span / 31, sample first data bit at t_end + 1.5T =====
-  // Guard against zero/div rounding
-  uint32_t bit_us = (span_us + EDGES_TO_MEASURE / 2) / EDGES_TO_MEASURE;
-  uint32_t half_us = bit_us / 2u;
+  // Recover bit time
+  const uint16_t denom = (uint16_t)(8u * (uint16_t)PREFIX_COUNT - 2u);
+  if (denom == 0) {
+    Serial.println(F("Bad PREFIX_COUNT for clock recovery."));
+    return false;
+  }
+  uint32_t bit_us  = (uint32_t)(fall_ts[FALLS_NEEDED - 1] - fall_ts[0]) / (uint32_t)denom;
 
-  // First sample at center of the first length bit:
-  // We ended exactly at start of the last '0' bit of preamble; next bit starts at t_end + T,
-  // its midpoint is t_end + 1.5T.
-  uint32_t t_sample = t_end + bit_us + half_us;
+  // Sample starts after last falling edge: next bit midpoint is +1.5T
+  uint32_t t_sample = (uint32_t)fall_ts[FALLS_NEEDED - 1] + 7*bit_us/4;
 
-  // ===== 3) Read TOTAL length byte (LSB-first) =====
-  // totalLenBytes = PREFIX_COUNT + 1 + payloadLen
-  uint32_t payloadLen = 0;                           // 32-bit to be safe during shifts
+  // -----------------------------
+  // State 3) MESSAGE LENGTH RECOVERY (same as before)
+  // -----------------------------
+  uint32_t payloadLen = 0;
   const uint8_t lenWireBits = (uint8_t)(LEN_BYTES * 8);
 
   for (uint8_t bit = 0; bit < lenWireBits; ++bit) {
-    while ((int32_t)(micros() - t_sample) < 0) { /* wait until sample time */ }
+    while ((uint32_t)micros() < t_sample) { /* spin */ }
     int b = READ_BIT();
-    if (b) payloadLen |= (1u << bit);              // LSB-first bit order
+    if (b) payloadLen |= (1u << bit);   // LSB-first on wire
     t_sample += bit_us;
   }
 
-  // Sanity check against MAX_INPUT
   if (payloadLen > MAX_INPUT) {
-    Serial.print(F("Bad payloadLen: ")); Serial.println((unsigned)payloadLen);
-    return false; // resync/drop
-  }
-
-  // ===== 4) Read payload bytes (LSB-first); no max, allocate exact =====
-  char* payload = (char*)malloc((size_t)payloadLen + 1);
-  if (!payload) {
-    Serial.println(F("Alloc failed; dropping packet."));
-    // Drain bits to keep cadence (optional)
+    Serial.print(F("Bad payloadLen: "));
+    Serial.println((unsigned)payloadLen);
+    Serial.print(F("Falling edges ("));
+    Serial.print(FALLS_NEEDED);
+    Serial.println(F("):"));
+    for (uint16_t i = 0; i < FALLS_NEEDED; ++i) {
+      Serial.print(i);
+      Serial.print(F(": "));
+      Serial.println(fall_ts[i]);
+    }
     return false;
   }
 
-  for (int k = 0; k < payloadLen; k++) {
+  // -----------------------------
+  // State 4) MESSAGE DECODING (same as before)
+  // -----------------------------
+  char* payload = (char*)malloc((size_t)payloadLen + 1);
+  if (!payload) {
+    Serial.println(F("Alloc failed; dropping packet."));
+    return false;
+  }
+
+  for (uint32_t k = 0; k < payloadLen; ++k) {
     uint8_t v = 0;
-    for (uint8_t i = 0; i < 8; i++) {
-      while ((int32_t)(micros() - t_sample) < 0) { /* wait */ }
+    for (uint8_t i = 0; i < 8; ++i) {
+      while ((uint32_t)micros() < t_sample) { /* spin */ }
       int b = READ_BIT();
-      if (b) v |= (1u << i);              // LSB-first
+      if (b) v |= (1u << i);            // LSB-first
       t_sample += bit_us;
     }
     payload[k] = (char)v;
   }
   payload[payloadLen] = '\0';
 
-  // ===== 5) Print recovered payload =====
   Serial.print(F("Clock="));
   Serial.print(bit_us);
   Serial.print(F("  |PayloadLen="));
-  Serial.print(payloadLen);
+  Serial.print((unsigned)payloadLen);
   Serial.print(F(" | Msg: "));
   Serial.println(payload);
-
-  // Optional hex dump
-  Serial.print(F("Hex: "));
-  for (int i = 0; i < payloadLen; i++) {
-    uint8_t v = (uint8_t)payload[i];
-    if (v < 16) Serial.print('0');
-    Serial.print(v, HEX);
-    Serial.print(' ');
-  }
-  Serial.println();
 
   free(payload);
   return true;
