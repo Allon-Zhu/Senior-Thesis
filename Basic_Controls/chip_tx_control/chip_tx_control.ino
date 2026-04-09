@@ -392,6 +392,92 @@ void scan_2v_store_and_return() {
   free(pd2);
 }
 
+// ------ QDCP Helpers ------
+
+static size_t read_line_from_serialusb(char *buf, size_t max_len) {
+  if (max_len == 0) return 0;
+  size_t idx = 0;
+  unsigned long t0 = millis();
+
+  while (millis() - t0 < 5000) {
+    while (SerialUSB.available()) {
+      char c = (char)SerialUSB.read();
+      if (c == '\r') continue;
+      if (c == '\n') {
+        buf[idx] = '\0';
+        return idx;
+      }
+      if (idx < max_len - 1) {
+        buf[idx++] = c;
+      }
+    }
+  }
+
+  buf[idx] = '\0';
+  return idx;
+}
+
+static bool read_exact_serialusb(uint8_t *buf, size_t nbytes, unsigned long timeout_ms) {
+  size_t got = 0;
+  unsigned long t0 = millis();
+
+  while (got < nbytes && (millis() - t0 < timeout_ms)) {
+    while (SerialUSB.available() && got < nbytes) {
+      buf[got++] = (uint8_t)SerialUSB.read();
+    }
+  }
+
+  return got == nbytes;
+}
+
+static void print_hex_serialusb(const uint8_t *data, size_t n) {
+  SerialUSB.print("QDCP_HEX ");
+  for (size_t i = 0; i < n; ++i) {
+    if (data[i] < 16) SerialUSB.print('0');
+    SerialUSB.print(data[i], HEX);
+    if (i + 1 < n) SerialUSB.print(' ');
+  }
+  SerialUSB.println();
+}
+
+void handle_qdcp_packet_serialusb() {
+  SerialUSB.println("READY_FOR_QDCP");
+
+  char lenbuf[24];
+  size_t len_n = read_line_from_serialusb(lenbuf, sizeof(lenbuf));
+  if (len_n == 0) {
+    SerialUSB.println("ERR_NO_LENGTH");
+    return;
+  }
+
+  long packet_len = atol(lenbuf);
+  if (packet_len <= 0 || packet_len > MAX_INPUT) {
+    SerialUSB.println("ERR_BAD_LENGTH");
+    return;
+  }
+
+  SerialUSB.println("SEND_QDCP_BYTES");
+
+  uint8_t *packet = (uint8_t *)malloc((size_t)packet_len);
+  if (!packet) {
+    SerialUSB.println("ERR_ALLOC");
+    return;
+  }
+
+  bool ok = read_exact_serialusb(packet, (size_t)packet_len, 5000);
+  if (!ok) {
+    free(packet);
+    SerialUSB.println("ERR_READ_TIMEOUT");
+    return;
+  }
+
+  SerialUSB.println("QDCP_PACKET_RECEIVED");
+  print_hex_serialusb(packet, (size_t)packet_len);
+  SerialUSB.println("QDCP_DONE");
+
+  free(packet);
+}
+
 // ------ setup & loop ------
 
 void setup() {
@@ -469,7 +555,7 @@ void loop() {
   }
 
   else if (command == "QDCP_PACKET") {
-    SerialUSB.println("Reading Packet");
+    handle_qdcp_packet_serialusb();
   }
 
   else if (command == "SEND_MESSAGE_d") {
