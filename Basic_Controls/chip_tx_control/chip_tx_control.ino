@@ -3,6 +3,14 @@
 #include "control.h"
 #include "Arduino.h"
 #include <stdlib.h>
+struct ScanAxis;
+
+/*
+
+TxController_v10, features:
+1. Voltage control for Tx by multiple DACs
+2. Interconnection with python controller
+*/
 
 // ========================== Serial / Timing ==========================
 static const int BaudRate       = 115200;
@@ -22,71 +30,97 @@ constexpr uint8_t calc_len_bytes_u32(uint32_t x) {
 }
 constexpr uint8_t LEN_BYTES = calc_len_bytes_u32(MAX_INPUT);
 
-
 // ========================== DAC / Hardware ==========================
-#define DAC_CS   13
-#define DAC_RST  28
+#pragma region Global Parameters
+const float pi = 3.1415926;
+
+// DAC parameters
+#define DAC0_CS 13
+#define DAC1_CS 24
+#define DAC0_RST 28
+#define DAC1_RST 26
 #define DAC_LDAC 12
-#define SYNC     10
+#define SYNC 10
 const int SPI_SPEED = 21000000;
-DACX1416* dac = nullptr;
+
+DACX1416* dac0 = nullptr;
+DACX1416* dac1 = nullptr;
 
 const int OUT_MAX = 65535;
 const uint8_t ALL_RAN = 40;   // DAC range U_40 (0..40 V logical)
 
 const float V_MIN = 0.0f;
 const float V_MAX = 30.0f;    // sanity clamp, even if DAC range is 40 V
+#pragma endregion
 
-// These are DAC channel indices (not MCU GPIO pins)
-const uint8_t PStop2_PIN  = 8;
-const uint8_t MZMtop2_PIN = 9;
-const uint8_t PStop1_PIN  = 10;
-const uint8_t MZMtop1_PIN = 11;
-const uint8_t MZM1_PIN    = 12;
-const uint8_t MZMC_PIN    = 13;
-const uint8_t EPStop_PIN  = 14;
-const uint8_t QF2top_PIN  = 15;
-const uint8_t QF3top_PIN  = 0;
-const uint8_t QF4_PIN     = 1;
-const uint8_t QF3bot_PIN  = 2;
-const uint8_t QF2bot_PIN  = 3;
-const uint8_t EPSbot_PIN  = 4;
-const uint8_t MZMQ_PIN    = 5;
-const uint8_t PSbot_PIN   = 6;
-const uint8_t MZMbot_PIN  = 7;
+#pragma region Tx Parameters
+float Tx_MUXdH = 10.21;
+float Tx_MUXdL = 12.21;
 
-// QF4 signaling levels (unchanged from your code)
-float Tx_VH = 19.0f;
-float Tx_VL = 23.0f;
+// Data transfer test
+int Tx_CDR_num = 20;
+static uint16_t DataBufferSize = 50;
+char* Data = new char[DataBufferSize];
+bool* DataTx = new bool[DataBufferSize * 8];
+int DataLength = 0;
+int Data_idx = 0;
+int Tx_idx = 0;
+float Tx_V = 0.0;
+// int Tx_trigger = 0;
 
 unsigned long Tx_t1 = 0;
-int Tx_idx = 0;
-int Data_idx = 0;
-float Tx_V = 0.0;
+unsigned long Tx_t2 = 0;
 
+int* CDR_time = new int[Tx_CDR_num];
+int CDR_idx = 0;
+unsigned long* Data_time = new unsigned long[32];
+int Data_Tidx = 0;
+#pragma endregion
+
+#pragma region Rx Parameters
+const uint16_t Rx_DelayToTx = 20 + 45;
+DueAdcFast DueAdcF(1024);
+const int RxTop_PIN = A1;
+const int RxBot_PIN = A0;
+const int PD1_PIN = A0;
+const int PD2_PIN = A1;
+const int PD3_PIN = A2;
+const int PD4_PIN = A3;
 const int TEENSY_PIN = 53;
+const int PD_Repeat = 4;
+int PD_DWDM = 2;
+float PD_DWDM_ratio = 0.31;
+uint16_t PD_Calib_data[4] = {2230, 2595, 2344, 2067};
+float PD_Calib_ratio[4] = {0.0, 0.0, 0.0, 0.0};
+int RxTop_Signal = 0;
+int RxBot_Signal = 0;
+#pragma endregion
 
-// ========================== Current Setpoints ==========================
-float V_EPStop   = 0.0f;
-float V_QF2top   = 0.0f;
-float V_QF3top   = 0.0f;
-float V_EPSbot   = 0.0f;
-float V_QF2bot   = 0.0f;
-float V_QF3bot   = 0.0f;
-float V_QF4      = 0.0f;
-float V_MZMtop1  = 0.0f;
-float V_MZMtop2  = 0.0f;
-float V_MZMbot   = 0.0f;
-float V_PStop1   = 0.0f;
-float V_PStop2   = 0.0f;
-float V_PSbot    = 0.0f;
-float V_MZM1     = 0.0f;
-float V_MZMQ     = 0.0f;
-float V_MZMC     = 0.0f;
+#pragma region QWN test Parameters
+int QWN_period_us = 1000;
+int QWN_RPC_period = 250;
+int QWN_dir = 0;
+static uint16_t QwnHeaderSize = 28;
+char* QWN_Header = new char[DataBufferSize];
+uint16_t QWN_RPC_delay_us = 90;
+const int ORI_PIN1 = 22;
+const int ORI_PIN2 = 24;
+#pragma endregion
 
-// Read-but-unused (keeps the stream aligned with Python)
-float PD_DWDM    = 0.0f;
-float RT_DWDM    = 0.0f;
+#pragma region Loop Parameters
+bool loop_On = 0;
+bool QF4_sweep_On = 0;
+
+int step = -1;
+
+// int* Monitor_data = new int[200];
+unsigned long* Monitor_data = new unsigned long[200];
+int Monitor_length = 0;
+int Monitor_idx = 0;
+unsigned long tic = 0;
+
+#pragma endregion Loop Parameters
+
 
 // ========================== Helpers ==========================
 static inline float clampV(float v) {
@@ -104,8 +138,11 @@ static inline uint16_t v2code(float v) {
 }
 
 String waitForSerialCommand() {
-  while (Serial.available() == 0) {
+  while (!Serial.available()) {
     // blocking wait
+    if (SerialUSB.available()) {
+      return SerialUSB.readStringUntil('\n');
+    }
   }
   String input = Serial.readStringUntil('\n');
   input.trim();
@@ -119,15 +156,14 @@ void set_tx_levels() {
   float newVH = clampV(Serial.parseFloat());
 
   // Assign (no ordering enforced; you currently use VL as idle)
-  Tx_VL = newVL;
-  Tx_VH = newVH;
+  Tx_MUXdL = newVL;
+  Tx_MUXdH = newVH;
 
   // Immediately drive QF4 to the (new) idle/low level and sync
   delayMicroseconds(50);
 
   Serial.println("Done");
 }
-
 
 bool printPacketBits(const bool* bits, size_t n) {
   char* buf = (char*)malloc(n + 1);
@@ -139,89 +175,304 @@ bool printPacketBits(const bool* bits, size_t n) {
   return true;
 }
 
+/*
+Helpers for Scan 2V
+*/ 
+
+struct ScanAxis {
+  uint8_t chip;
+  uint8_t pin;
+  float v_init;
+  float v_start;
+  float v_stop;
+  uint16_t N;
+};
+
+static bool parse_axis_line(const String& line, ScanAxis& ax) {
+  int c, p;
+  float vi, vs, ve;
+  int n;
+  int ok = sscanf(line.c_str(), "%d %d %f %f %f %d", &c, &p, &vi, &vs, &ve, &n);
+  if (ok != 6) return false;
+
+  ax.chip    = (uint8_t)c;
+  ax.pin     = (uint8_t)p;
+  ax.v_init  = clampV(vi);
+  ax.v_start = clampV(vs);
+  ax.v_stop  = clampV(ve);
+
+  if (n < 2) return false;
+  ax.N = (uint16_t)n;
+  return true;
+}
+
+static inline float axis_value_vsq(const ScanAxis& ax, uint16_t k) {
+  // k in [0, N-1]
+  float s = clampV(ax.v_start);
+  float e = clampV(ax.v_stop);
+
+  // uniform in u = V^2
+  float s2 = s * s;
+  float e2 = e * e;
+
+  float t = (ax.N <= 1) ? 0.0f : ((float)k / (float)(ax.N - 1));
+  float u = s2 + t * (e2 - s2);
+
+  if (u < 0.0f) u = 0.0f;         // should not happen after clamp, but safe
+  float v = sqrtf(u);
+  return clampV(v);
+}
+
+static inline int pd_index_to_pin(uint8_t pd_idx) {
+  switch (pd_idx) {
+    case 1: return PD1_PIN;  // A0
+    case 2: return PD2_PIN;  // A1
+    case 3: return PD3_PIN;  // A2
+    case 4: return PD4_PIN;  // A3
+    default: return PD1_PIN; // fallback
+  }
+}
+
+static inline uint16_t read_pd(int pin) {
+  // return (uint16_t)analogRead(pin);
+  return (uint16_t)DueAdcF.ReadAnalogPin(pin);
+}
+
 // ========================== UPDATE_VOLTAGES ==========================
+
+bool set_dac_voltage(uint8_t chip_id, uint8_t pin, float volt) {
+  if(chip_id == 0){
+    dac0 -> set_out(pin, v2code(volt));
+    return true;
+  }
+  else if(chip_id == 1){
+    dac1 -> set_out(pin, v2code(volt));
+    return true;
+  }
+  else{
+    return false;
+  }
+}
+
 void update_voltages() {
   // Read floats in the exact order Python sends them
   delay(200);
   Serial.println("ACK");
-  V_EPStop   = clampV(Serial.parseFloat());
-  V_QF2top   = clampV(Serial.parseFloat());
-  V_QF3top   = clampV(Serial.parseFloat());
-  V_EPSbot   = clampV(Serial.parseFloat());
-  V_QF2bot   = clampV(Serial.parseFloat());
-  V_QF3bot   = clampV(Serial.parseFloat());
-  V_QF4      = clampV(Serial.parseFloat());
-  V_MZMtop1  = clampV(Serial.parseFloat());
-  V_MZMtop2  = clampV(Serial.parseFloat());
-  V_MZMbot   = clampV(Serial.parseFloat());
-  V_PStop1   = clampV(Serial.parseFloat());
-  V_PStop2   = clampV(Serial.parseFloat());
-  V_PSbot    = clampV(Serial.parseFloat());
-  V_MZM1     = clampV(Serial.parseFloat());
-  V_MZMQ     = clampV(Serial.parseFloat());
-  V_MZMC     = clampV(Serial.parseFloat());
+  
+  while (true) {
+    String line = waitForSerialCommand();  // blocks until a line comes
 
-  // Keep stream aligned (read but not used for DAC)
-  PD_DWDM     = Serial.parseFloat();
-  RT_DWDM     = Serial.parseFloat();
+    if (line.length() == 0) {
+      // ignore empty lines
+      continue;
+    }
 
-  // Always set all outputs, then always sync
-  dac->set_out(MZM1_PIN,    v2code(V_MZM1));
-  dac->set_out(MZMtop1_PIN, v2code(V_MZMtop1));
-  dac->set_out(MZMtop2_PIN, v2code(V_MZMtop2));
-  dac->set_out(MZMbot_PIN,  v2code(V_MZMbot));
-  dac->set_out(PStop1_PIN,  v2code(V_PStop1));
-  dac->set_out(PStop2_PIN,  v2code(V_PStop2));
-  dac->set_out(PSbot_PIN,   v2code(V_PSbot));
-  dac->set_out(MZMQ_PIN,    v2code(V_MZMQ));
-  dac->set_out(MZMC_PIN,    v2code(V_MZMC));
-  dac->set_out(EPStop_PIN,  v2code(V_EPStop));
-  dac->set_out(QF2top_PIN,  v2code(V_QF2top));
-  dac->set_out(QF3top_PIN,  v2code(V_QF3top));
-  dac->set_out(EPSbot_PIN,  v2code(V_EPSbot));
-  dac->set_out(QF2bot_PIN,  v2code(V_QF2bot));
-  dac->set_out(QF3bot_PIN,  v2code(V_QF3bot));
-  dac->set_out(QF4_PIN,     v2code(V_QF4));
+    line.trim();
 
-  dac->sync(1);                 // <-- always sync after an update
+    // Check for END of bulk update
+    if (line.equals("END")) {
+      break;
+    }
+
+    uint8_t chip_id, pin;
+    float volt;
+    int parsed = sscanf(line.c_str(), "%hhu %hhu %f", &chip_id, &pin, &volt);
+    volt = clampV(volt);
+
+    // Apply to DAC
+    if (!set_dac_voltage(chip_id, pin, volt)) {
+      Serial.println(F("ERR bad chip"));
+    }
+  }
+
+  dac0 -> sync(1);                 // <-- always sync after an update
   delayMicroseconds(50);
 
+  // Done with all updates
   Serial.println("Done.");
 }
 
-// ========================== Setup / Loop ==========================
+// ========================== SCAN_VOLTAGES ==========================
+
+void scan_2v_store_and_return() {
+  delay(50);
+  Serial.println("ACK");
+
+  // --- read 2 axes + pd pins + END ---
+  ScanAxis a1, a2;
+  int pd1_pin = A0, pd2_pin = A1;
+
+  String line;
+
+  line = waitForSerialCommand();
+  if (!parse_axis_line(line, a1)) { Serial.println("ERR axis1"); return; }
+
+  line = waitForSerialCommand();
+  if (!parse_axis_line(line, a2)) { Serial.println("ERR axis2"); return; }
+
+  line = waitForSerialCommand();
+  int i1, i2;
+  if (sscanf(line.c_str(), "%d %d", &i1, &i2) != 2) { Serial.println("ERR pds"); return; }
+  if (i1 < 1 || i1 > 4 || i2 < 1 || i2 > 4) { Serial.println("ERR pds"); return; }
+
+  pd1_pin = pd_index_to_pin((uint8_t)i1);
+  pd2_pin = pd_index_to_pin((uint8_t)i2);
+
+  line = waitForSerialCommand();
+  if (!line.equals("END")) { Serial.println("ERR no END"); return; }
+
+  Serial.println("ACK");
+
+  uint16_t n1 = a1.N;
+  uint16_t n2 = a2.N;
+  uint32_t N = (uint32_t)n1 * (uint32_t)n2;
+
+  // allocate arrays (PD only)
+  uint16_t* pd1 = (uint16_t*)malloc(N * sizeof(uint16_t));
+  uint16_t* pd2 = (uint16_t*)malloc(N * sizeof(uint16_t));
+  if (!pd1 || !pd2) {
+    if (pd1) free(pd1);
+    if (pd2) free(pd2);
+    Serial.println("ERR alloc");
+    return;
+  }
+
+  // --- set initial voltages ---
+  set_dac_voltage(a1.chip, a1.pin, a1.v_init);
+  set_dac_voltage(a2.chip, a2.pin, a2.v_init);
+  dac0->sync(1);
+  dac1->sync(1);
+  delayMicroseconds(50);
+
+  // --- scan & store ---
+  const uint16_t settle_us = 100;   // your requirement
+  uint32_t idx = 0;
+
+  for (uint16_t i = 0; i < n1; i++) {
+    float v1 = axis_value_vsq(a1, i);
+    set_dac_voltage(a1.chip, a1.pin, v1);
+
+    for (uint16_t j = 0; j < n2; j++) {
+      float v2 = axis_value_vsq(a2, j);
+      set_dac_voltage(a2.chip, a2.pin, v2);
+
+      // latch updates
+      dac0->sync(1);
+      dac1->sync(1);
+
+      delayMicroseconds(settle_us);
+
+      pd1[idx] = read_pd(pd1_pin);
+      pd2[idx] = read_pd(pd2_pin);
+      idx++;
+    }
+  }
+
+  // --- restore initial ---
+  set_dac_voltage(a1.chip, a1.pin, a1.v_init);
+  set_dac_voltage(a2.chip, a2.pin, a2.v_init);
+  dac0->sync(1);
+  dac1->sync(1);
+  delayMicroseconds(50);
+
+  Serial.println("Scan2V Finished");
+
+  // --- return results ---
+  Serial.print("BEGIN ");
+  Serial.print(n1);
+  Serial.print(" ");
+  Serial.println(n2);
+
+  Serial.write((uint8_t*)pd1, N * sizeof(uint16_t));
+  Serial.write((uint8_t*)pd2, N * sizeof(uint16_t));
+
+  Serial.println("DONE");
+
+  free(pd1);
+  free(pd2);
+}
+
+// ------ setup & loop ------
+
 void setup() {
   Serial.begin(BaudRate);
   Serial.setTimeout(SerialTimeOut);
+  SerialUSB.begin(BaudRate);
+  SerialUSB.setTimeout(SerialTimeOut);
 
-  pinMode(SYNC, OUTPUT);
-  pinMode(TEENSY_PIN, OUTPUT);
+  #pragma region DAC preset
+  dac0 = new DACX1416(DAC0_CS, DAC0_RST, DAC_LDAC, &SPI, SPI_SPEED);
+  dac1 = new DACX1416(DAC1_CS, DAC1_RST, DAC_LDAC, &SPI, SPI_SPEED);
 
-  // Initialize DAC
-  dac = new DACX1416(DAC_CS, DAC_RST, DAC_LDAC, &SPI, SPI_SPEED);
-  delay(1500);
-  dac->read_reg(R_DEVICEID);
-  (void)dac->init();
-  dac->set_int_reference(false);
+  dac0 -> read_reg(R_DEVICEID);
+  dac1 -> read_reg(R_DEVICEID);
+  int res0 = dac0 -> init();
+  int res1 = dac1 -> init();
+  dac0 -> set_int_reference(false);
+  dac1 -> set_int_reference(false);
 
-  // Enable/sync all channels, set to 0..40V logical range
-  for (int i = 0; i < 16; i++) {
-    dac->set_ch_enabled(i, true);
-    dac->set_range(i, DACX1416::U_40);
-    dac->set_ch_sync(i, true);  // changes stage until sync()
+  for(int i=0; i<16; i++){
+    dac0 -> set_ch_enabled(i, true);
+    dac0 -> set_range(i, DACX1416::U_40);
+    dac0 -> set_ch_sync(i, true);
+    dac1 -> set_ch_enabled(i, true);
+    dac1 -> set_range(i, DACX1416::U_40);
+    dac1 -> set_ch_sync(i, true);
   }
 
-  Serial.println("Ready.");
+  Serial.println("TX Ready.");
+
+  #pragma endregion
+
+  #pragma region ADC preset
+  DueAdcF.EnablePin(A0);
+  DueAdcF.EnablePin(A1);
+  DueAdcF.EnablePin(A2);
+  DueAdcF.EnablePin(A3);
+  DueAdcF.Start1Mhz(); 
+
+  // // Calculate PD calib ratios
+  // for(int ipd = 0; ipd < 4; ipd++){ 
+  //   PD_Calib_ratio[ipd] = float(PD_Calib_data[0]) / float(PD_Calib_data[ipd]);
+  //   if(ipd == PD_DWDM - 1) PD_Calib_ratio[ipd] = PD_Calib_ratio[ipd] * PD_DWDM_ratio;
+  // }
+
+  #pragma endregion
+
 }
+
+
+void ADC_Handler() {
+  DueAdcF.adcHandler();
+}
+
 
 void loop() {
   String command = waitForSerialCommand();
 
   if (command == "UPDATE_VOLTAGES") {
-    update_voltages();  // prints "Done."
+    update_voltages();
   }
 
-  else if (command == "SEND_MESSAGE") {
+  else if (command == "SET_TX_LEVELS") {
+    set_tx_levels();
+  }
+
+  else if (command == "TX_SHUT_DOWN") {
+    for(int i=0; i<16; i++){
+      dac0 -> set_out(i, 0);
+      dac1 -> set_out(i, 0);
+    }
+
+    dac0 -> sync(1);
+    delay(200);
+  }
+
+  else if (command == "QDCP_PACKET") {
+    SerialUSB.println("Reading Packet");
+  }
+
+  else if (command == "SEND_MESSAGE_d") {
     // Wait for message payload line
     while (!Serial.available()) { /* wait */ }
 
@@ -262,16 +513,16 @@ void loop() {
     while (true) {
       if (micros() - Tx_t1 >= Tx_idx * Tx_period_us) {
         if (Tx_idx < (int)(totalLen * 8)) {
-          Tx_V = (packetBin[Data_idx] == 0) ? Tx_VL : Tx_VH;
+          Tx_V = (packetBin[Data_idx] == 0) ? Tx_MUXdL : Tx_MUXdH;
           Data_idx++;
-          dac->set_out(QF4_PIN, v2code(Tx_V));
-          dac->sync(1);              // latch every bit transition
+          // dac1->set_out(MUXd_PIN, v2code(Tx_V));
+          dac1->sync(1);              // latch every bit transition
           Tx_idx++;
           delayMicroseconds(30);
         } else {
           // Done: set to idle level and break
-          dac->set_out(QF4_PIN, v2code(Tx_VL));
-          dac->sync(1);
+          // dac1->set_out(MUXd_PIN, v2code(Tx_MUXdL));
+          dac1->sync(1);
           break;
         }
       }
@@ -282,25 +533,8 @@ void loop() {
     Serial.println("Done");
   }
 
-  else if (command == "TEST_TEENSY") {
-    while (!Serial.available()) { /* wait */ }
-    char mode = Serial.read();
-    if (mode == '0') {
-      digitalWrite(TEENSY_PIN, LOW);
-      Serial.println("Setting Low");
-    } else if (mode == '1') {
-      digitalWrite(TEENSY_PIN, HIGH);
-      Serial.println("Setting High");
-    }
-    Serial.println("Done");
+  else if (command == "SCAN_2V") {
+    scan_2v_store_and_return();
   }
 
-  else if (command == "SET_TX_LEVELS") {
-    set_tx_levels();
-  }
-
-  else {
-    // Unknown command; ignore or add debug
-    // Serial.println("Unknown command");
-  }
 }
