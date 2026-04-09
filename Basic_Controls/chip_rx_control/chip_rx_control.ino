@@ -178,7 +178,7 @@ void setup() {
   DueAdcF.EnablePin(PD3_PIN);
   DueAdcF.EnablePin(PD4_PIN);
   DueAdcF.Start1Mhz();
-  Serial.println("Ready.");
+  Serial.println("RX Ready.");
 }
 
 void ADC_Handler() {
