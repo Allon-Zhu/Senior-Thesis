@@ -1,0 +1,51 @@
+{
+  "connection": {
+    "laser_host": "192.168.1.200",
+    "tx_port": "COM4",
+    "rx_port": "COM3",
+    "baudrate": 115200,
+    "timeout": 0.2
+  },
+  "tx": {
+    "board_params": {
+      "prefix_count": 5,
+      "scan_settle_us": 100,
+      "tx_mux_high": 0.0,
+      "tx_mux_low": 5.0,
+      "tx_period_us": 100,
+      "voltage_max": 30.0,
+      "voltage_min": 0.0
+    },
+    "channels": [
+      { "name": "CQS", "chip": 0, "pin": 7, "voltage": 0.0 },
+      { "name": "QS", "chip": 0, "pin": 6, "voltage": 0.0 },
+      { "name": "EPS0", "chip": 0, "pin": 3, "voltage": 0.0 },
+      { "name": "F011", "chip": 0, "pin": 5, "voltage": 0.0 },
+      { "name": "F012", "chip": 0, "pin": 4, "voltage": 0.0 },
+      { "name": "MUXa", "chip": 1, "pin": 10, "voltage": 0.0 },
+      { "name": "MUXc", "chip": 1, "pin": 12, "voltage": 0.0 },
+      { "name": "PCa0", "chip": 0, "pin": 0, "voltage": 0.0 },
+      { "name": "PCa1", "chip": 0, "pin": 1, "voltage": 0.0 },
+      { "name": "PCa2", "chip": 0, "pin": 2, "voltage": 0.0 },
+      { "name": "PCc0", "chip": 1, "pin": 8, "voltage": 0.0 },
+      { "name": "PCc1", "chip": 1, "pin": 11, "voltage": 0.0 },
+      { "name": "PCc2", "chip": 1, "pin": 9, "voltage": 0.0 }
+    ],
+    "gui_ranges": {
+      "default": { "min": 0.0, "max": 30.0, "step": 0.05 },
+      "PD_DWDM": { "min": 1.0, "max": 4.0, "step": 1.0 },
+      "RT_DWDM": { "min": 0.0, "max": 1.0, "step": 0.01 }
+    }
+  },
+  "rx": {
+    "board_params": {
+      "decode_threshold": 500,
+      "edge_confirm_us": 2,
+      "pd_repeat": 5,
+      "prefix_count": 5,
+      "stream_delay_ms": 50
+    },
+    "plot_window_s": 60.0,
+    "plot_y_max": 4096
+  }
+}
