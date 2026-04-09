@@ -14,7 +14,8 @@ const int PD4_PIN = A3;
 volatile int      PD_Repeat = 5;     // average N samples per channel
 volatile uint16_t Delay_ms  = 50;    // delay between lines while streaming
 
-#define THRESH 500
+// #define THRESH 500
+#define THRESH 300
 #define READ_BIT()  ((DueAdcF.ReadAnalogPin(PD1_PIN) > THRESH) ? 1 : 0)
 
 // ====== Simple packet decode config (match your TX) ======

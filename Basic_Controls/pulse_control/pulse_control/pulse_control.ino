@@ -21,17 +21,25 @@ void continuous()
   digitalWriteFast(pulse_pin, HIGH);
 }
 
+// void pulse()
+// {
+//   digitalWriteFast(pulse_pin, HIGH);
+//   digitalWriteFast(pulse_pin, LOW);
+//   delayNanoseconds(200);
+//   // delayNanoseconds(220);
+//   digitalWriteFast(trigger_pin, HIGH);
+//   delayNanoseconds(10);
+//   digitalWriteFast(trigger_pin, LOW);
+//   delayNanoseconds(733);
+//   // delayNanoseconds(713);
+// }
+
 void pulse()
 {
   digitalWriteFast(pulse_pin, HIGH);
+  // delayNanoseconds(309);
   digitalWriteFast(pulse_pin, LOW);
-  delayNanoseconds(200);
-  // delayNanoseconds(220);
-  digitalWriteFast(trigger_pin, HIGH);
-  delayNanoseconds(10);
-  digitalWriteFast(trigger_pin, LOW);
-  delayNanoseconds(733);
-  // delayNanoseconds(713);
+  delayNanoseconds(309);
 }
 
 void loop()
